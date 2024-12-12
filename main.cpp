@@ -17,19 +17,21 @@
 
 const int BUZZ_PIN = 13;
 const int BUTTON_PIN = 17;
+const int RESET_PIN = 2;
 
 #define SDA_ACCEL 33
 #define SCL_ACCEL 32
 #define SDA_TEMP 21
 #define SCL_TEMP 22
-#define FALL_THRESH 500
+#define FALL_THRESH 570
 //Just change to the current AWS server IP
-#define SERVER_IP "3.141.15.238"
+#define SERVER_IP "3.129.44.38"
 
 void buzz(int pin);
+void buzz_off(int pin);
 void start_accel();
 void start_temp();
-bool detect_fall();
+float detect_fall();
 void read_gyro();
 void read_accel();
 void read_temp();
@@ -37,6 +39,7 @@ void read_temp_hum();
 void calibrate_fall();
 void connect_internet();
 void send_message_cloud(char* payload);
+float max(float a, float b, float c);
 
 esp_err_t err;
 TwoWire I2C_ACCEL = TwoWire(0);
@@ -125,26 +128,37 @@ void setup()
   I2C_ACCEL.begin(SDA_ACCEL, SCL_ACCEL, 10000000);
   I2C_TEMP.begin(SDA_TEMP, SCL_TEMP, 100000);
   pinMode(BUTTON_PIN, INPUT);
+  pinMode(RESET_PIN, INPUT);
   start_temp();
   start_accel();
+  Serial.print("Ready to Go!");
 }
 
 
 void loop() 
 {
     aht.getEvent(&humidity, &temp);
-    if (detect_fall())
+    float fall_data = detect_fall();
+    if (fall_data)
     {
-        sprintf(payload, "/?Temp=%.2f&Humidity=%.2f&Message=%s", temp.temperature, humidity.relative_humidity,"ALERT");
+        sprintf(payload, "/?Temp=%.2f&Humidity=%.2f&FallData=%.2f&Message=%s", temp.temperature, humidity.relative_humidity,fall_data,"fall");
         buzz(BUZZ_PIN);
         send_message_cloud(payload);
     }
     else if(digitalRead(BUTTON_PIN) == HIGH)
     {
-        sprintf(payload, "/?Temp=%.2f&Humidity=%.2f&Message=%s", temp.temperature, humidity.relative_humidity,"ALERT");
+        sprintf(payload, "/?Temp=%.2f&Humidity=%.2f&FallData=0&Message=%s", temp.temperature, humidity.relative_humidity,"manual_alert");
         buzz(BUZZ_PIN);
         send_message_cloud(payload);
     }
+    else if((temp.temperature > 32) or (humidity.relative_humidity > 70) or (temp.temperature < 19))
+    {
+        sprintf(payload, "/?Temp=%.2f&Humidity=%.2f&FallData=0&Message=%s", temp.temperature, humidity.relative_humidity,"dangerous_condition");
+        buzz(BUZZ_PIN);
+        send_message_cloud(payload);
+    }
+    else if(digitalRead(RESET_PIN) == HIGH)
+        buzz_off(BUZZ_PIN);
     
 }
 
@@ -224,6 +238,11 @@ void buzz(int pin)
     delay(10);
 }
 
+void buzz_off(int pin)
+{
+    noTone(pin);
+}
+
 //Starts the accerometer I2C protocol
 void start_accel()
 {
@@ -251,15 +270,15 @@ void start_temp()
 }
 
 
-bool detect_fall()
+float detect_fall()
 {
-    float accel_x = myIMU.readFloatGyroX();
-    float accel_y = myIMU.readFloatGyroY();
-    float accel_z = myIMU.readFloatGyroZ();
-    if (abs(accel_x) > FALL_THRESH or abs(accel_y) > FALL_THRESH or abs(accel_z) > FALL_THRESH)
-        return true;
+    float accel_x = abs(myIMU.readFloatGyroX());
+    float accel_y = abs(myIMU.readFloatGyroY());
+    float accel_z = abs(myIMU.readFloatGyroZ());
+    if (accel_x > FALL_THRESH or accel_y > FALL_THRESH or accel_z > FALL_THRESH)
+        return max(accel_x,accel_y,accel_z);
     else
-        return false;
+        return 0;
 }   
 
 //Reads gyroscope 
@@ -301,4 +320,15 @@ void read_temp_hum()
 {
     aht.getEvent(&humidity, &temp);
     //sprintf(payload, "/?Temp=%.2f&Humidity=%.2f", temp.temperature, humidity.relative_humidity);
+}
+float max(float a, float b, float c) 
+{
+    float max_val = a; // Assume 'a' is the largest
+    if (b > max_val) {
+        max_val = b; // Update if 'b' is larger
+    }
+    if (c > max_val) {
+        max_val = c; // Update if 'c' is larger
+    }
+    return max_val; // Return the largest value
 }
